@@ -1,39 +1,74 @@
 package server
 
 import Message
+import java.awt.Color
+import java.io.EOFException
+import java.io.IOException
 import java.io.ObjectInputStream
 import java.io.ObjectOutputStream
 import java.net.ServerSocket
 import java.net.Socket
-import java.net.SocketException
+import java.util.*
 
-//TODO: stop crashing when client disconnects
 
-fun main() {
-    val serverConfig =  ChatServerConfig.Builder().port(8000).build();
+fun main(args: Array<String>) {
+    val serverConfig = parseArgs(args)
     val server = ChatServer(serverConfig);
-
+    server.startListening()
 }
-class ChatServer (private val config: ChatServerConfig){
-    private val clients = mutableListOf<ChatClientHandler>();
-    private val serverSocket: ServerSocket = ServerSocket(config.port);
+
+fun parseArgs(args: Array<String>): ChatServerConfig {
+    val builder = ChatServerConfig.Builder()
+
+    var i = 0;
+    while (i < args.size) {
+        when (args[i]) {
+            "-p", "--port" -> {
+                builder.port(args[++i].toInt())
+            }
+        }
+        i++;
+    }
+    return builder.build()
+}
+
+class ChatServer(private val config: ChatServerConfig) : Runnable {
+    companion object {
+        val SERVER_COLOR: Color = Color.BLACK
+    }
+
+    private val clients = Collections.synchronizedList(mutableListOf<ChatClientHandler>())
+    private val serverSocket: ServerSocket = ServerSocket(config.port)
+
     init {
-        println(serverSocket.isBound)
-        println(serverSocket)
-        while(true){
-            val client = serverSocket.accept();
-            val clientHandler = ChatClientHandler(client);
-            println("Client connected: ${client.inetAddress.hostAddress}")
-            clients.add(clientHandler);
-            Thread(clientHandler).start();
-            broadcastMessage("Client connected: ${client.inetAddress.hostAddress}")
+        println(config)
+    }
+
+    fun startListening() {
+        Thread(this).start()
+    }
+
+    override fun run() {
+        while (!serverSocket.isClosed) {
+            try {
+                val client = serverSocket.accept()
+                val clientHandler = ChatClientHandler(client)
+                println("Client connected: ${client.inetAddress.hostAddress}")
+                clients.add(clientHandler)
+                Thread(clientHandler).start()
+                broadcastServerMessage("Client connected: ${client.inetAddress.hostAddress}")
+            } catch (e: IOException) {
+                println("Server closed")
+                break
+            }
         }
     }
 
-    fun broadcastMessage(text: String){
-        broadcastMessage(Message("Server", text, System.currentTimeMillis()))
+    private fun broadcastServerMessage(text: String) {
+        broadcastMessage(Message("Server", text, System.currentTimeMillis(), SERVER_COLOR))
     }
-    fun broadcastMessage(message: Message){
+
+    fun broadcastMessage(message: Message) {
         clients.forEach { client -> client.sendMessage(message) }
     }
 
@@ -41,39 +76,40 @@ class ChatServer (private val config: ChatServerConfig){
         private val streamIn: ObjectInputStream = ObjectInputStream(client.getInputStream())
         private val streamOut: ObjectOutputStream = ObjectOutputStream(client.getOutputStream())
         override fun run() {
-
-
-            while (!client.isClosed) {
+            while (!client.isClosed && client.isConnected) {
                 try {
-                    when(val nextObject: Any = streamIn.readObject()){
+                    when (val nextObject: Any = streamIn.readObject()) {
                         is Message -> {
-                            println("Client said: ${nextObject}")
-                            broadcastMessage(nextObject)
-                        }
-                        is String -> {
-                            println("Client said: $nextObject")
-                            broadcastMessage(nextObject)
+                            receiveMessage(nextObject)
                         }
                         else -> {
                             println("Unknown object type")
                         }
                     }
-                } catch (e: SocketException){
-                    println("Client disconnected")
-                    this.disconnect()
+                } catch (e: IOException) {
+                    this.onSocketClosed()
+                } catch (e: EOFException) {
+                    this.onSocketClosed()
                 }
             }
-            println("Client disconnected")
         }
 
-        fun sendMessage(text: String){
-            sendMessage(Message("Server", text, System.currentTimeMillis()))
+        private fun onSocketClosed() {
+            println("Client disconnected")
+            this.close()
         }
-        fun sendMessage(message: Message){
+
+        private fun receiveMessage(message: Message) {
+            println("Client said: $message")
+            broadcastMessage(message)
+        }
+
+        fun sendMessage(message: Message) {
             streamOut.writeObject(message)
         }
 
-        fun disconnect() {
+
+        fun close() {
             streamOut.close()
             streamIn.close()
             client.close();
@@ -81,4 +117,6 @@ class ChatServer (private val config: ChatServerConfig){
         }
 
     }
+
+
 }

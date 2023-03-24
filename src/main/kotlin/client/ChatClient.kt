@@ -13,61 +13,68 @@ fun main(args: Array<String>) {
     val client = ChatClient(config);
 }
 
-class ChatClient (private val config: ChatClientConfig){
+class ChatClient(private val config: ChatClientConfig) {
 
     private val socket = Socket(config.host, config.port);
+
     private val streamOut: ObjectOutputStream = ObjectOutputStream(socket.getOutputStream());
     private val streamIn: ObjectInputStream = ObjectInputStream(socket.getInputStream());
 
     private val messageListeners = mutableListOf<(Message) -> Unit>();
+    private val closeListeners = mutableListOf<() -> Unit>();
 
     init {
         Thread(this::listenForMessages).start();
     }
 
-    private fun listenForMessages(){
-        while (!socket.isClosed){
+    private fun listenForMessages() {
+        while (!socket.isClosed) {
             try {
                 streamIn.readObject()?.let {
-                    when(it){
+                    when (it) {
                         is Message -> {
                             messageListeners.forEach { listener -> listener(it) }
-                        }
-                        is String -> {
-                            messageListeners.forEach { listener -> listener(Message("Unknown", it, System.currentTimeMillis())) }
                         }
                         else -> {
                             println("Unknown object type")
                         }
                     }
                 }
-            } catch (e: SocketException){
+            } catch (e: SocketException) {
+                disconnect()
                 println("Socket closed, stopping listening")
                 break;
             }
         }
     }
 
-    fun sendMessage(message: String){
-        sendMessage(Message(config.userName, message, System.currentTimeMillis()))
-    }
-    fun sendMessage(message: Message){
-        if(!socket.isClosed){
+
+    fun sendMessage(message: Message) {
+        if (!socket.isClosed) {
             streamOut.writeObject(message)
         }
     }
 
-    fun addMessageListener(listener: (Message) -> Unit){
-        messageListeners.add(listener);
+    fun sendMessage(text: String) {
+        sendMessage(Message(config.userName, text, System.currentTimeMillis(), config.preferredColor))
     }
 
-    fun disconnect(){
-        sendMessage(Message(config.userName, "IS LEAVING", System.currentTimeMillis()))
+    fun addMessageListener(listener: (Message) -> Unit) {
+        messageListeners.add(listener);
+    }
+    fun addCloseListener(listener: () -> Unit) {
+        closeListeners.add(listener);
+    }
 
-        streamOut.close()
-        streamIn.close()
+    fun disconnect() {
+        closeListeners.forEach { listener -> listener() }
+        try {
+            streamOut.close()
+            streamIn.close()
+        } catch (e: Exception) {
+            println("Error closing streams")
+        }
         socket.close();
-
     }
 
 }
